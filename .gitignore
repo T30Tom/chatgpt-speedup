@@ -1,0 +1,26 @@
+# Node / tooling (if you add build steps later)
+node_modules/
+dist/
+build/
+.tmp/
+.cache/
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Packaging
+*.zip
+
+# Optional: images you generate locally
+*.psd
+*.ai
+*.sketch
+*.xcf
