@@ -1,3 +1,4 @@
+/* eslint no-unused-vars: ["warn", { "argsIgnorePattern": "^_" }] */
 // Background: on install/startup, ask open ChatGPT tabs to refresh.
 const CHAT_URLS = ["https://chat.openai.com/*", "https://chatgpt.com/*"];
 
@@ -8,7 +9,7 @@ async function promptRefreshAllOpenChatTabs() {
   for (const tab of tabs) {
     try {
       await chrome.tabs.sendMessage(tab.id, { type: "refreshPrompt" });
-    } catch (e) {
+    } catch (_e) {
       // Content script might not be injected yet; ignore.
     }
   }
@@ -45,8 +46,13 @@ chrome.commands.onCommand.addListener(async (command) => {
         type: "command",
         command: command
       });
-    } catch (e) {
+    } catch (_e) {
       // Content script might not be ready; ignore
     }
   }
 });
+
+
+
+
+
