@@ -4,7 +4,8 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![CI](https://github.com/T30Tom/chatgpt-speedup/actions/workflows/ci.yml/badge.svg)](../../actions)
 
-> Make long ChatGPT chats feel snappy. This extension prunes older messages in the DOM and keeps only the most recent **N** visible (default 5). Older turns are archived either in **storage** or moved to a **hidden container**, and can be restored on demand. All data stays **local** in your browser.
+> Make long ChatGPT chats feel snappy. This extension prunes older messages in the DOM and keeps only the most recent **N** visible (default 5). Older tu
+s are archived either in **storage** or moved to a **hidden container**, and can be restored on demand. All data stays **local** in your browser.
 
 ## ✨ Features
 - Keep last **N** visible; archive older messages (storage or hidden)
@@ -14,7 +15,8 @@
 - MV3, Chromium-compatible (Chrome, Opera, Edge)
 
 ## 🧩 How it works
-The content script detects conversation turns (robust selectors), prunes older nodes, and updates counts. In storage mode, pruned nodes are serialized and removed from the DOM; in hidden mode, they’re moved to an off-screen container for fast restore.
+The content script detects conversation tu
+s (robust selectors), prunes older nodes, and updates counts. In storage mode, pruned nodes are serialized and removed from the DOM; in hidden mode, they’re moved to an off-screen container for fast restore.
 
 ## 🔧 Install (dev)
 1. Clone this repo
@@ -35,7 +37,8 @@ markdown
 Copy code
 
 ## 🛠 Settings (Popup)
-- **Keep N**: number of visible turns
+- **Keep N**: number of visible tu
+s
 - **Mode**: `storage` (serialize + remove) or `hidden` (move to hidden container)
 - **Quick actions**: +5, −5, collapse to 1
 - **Refresh Tabs**: ask open ChatGPT tabs to refresh after updates
@@ -64,8 +67,11 @@ Issues and PRs welcome!
 - Smarter prune heuristics (skip when user scrolls up)
 - Export/import archives (JSON)
 - Per-conversation profiles
-rnSee: How to cut a releasern
-rn## How to cut a release
+
+See: [How to cut a release](RELEASING.md)
+
+
+## How to cut a release
 
 To create a GitHub Release (the Action zips the extension and attaches a checksum), tag a version and push the tag:
 
@@ -78,6 +84,13 @@ git push origin v0.1.0 pushes that tag to GitHub.
 
 The Release workflow (triggered by tags matching v*) builds chatgpt-speedup-vX.Y.Z.zip,
 generates SHA256SUMS.txt, and publishes a GitHub Release with those files attached.
-rnSee: How to cut a releasern
-rnSee: How to cut a release
-rn
+
+See: [How to cut a release](RELEASING.md)
+
+
+See: [How to cut a release](RELEASING.md)
+
+
+
+
+
