@@ -1,0 +1,126 @@
+// User activity tracking for auto-collapse
+let lastActivityTime = Date.now();
+let autoCollapseTimer = null;
+
+function resetActivityTimer() {
+  lastActivityTime = Date.now();
+  if (state?.autoCollapse && !autoCollapseTimer) {
+    startAutoCollapseTimer();
+  }
+}
+
+function startAutoCollapseTimer() {
+  if (autoCollapseTimer) clearInterval(autoCollapseTimer);
+  autoCollapseTimer = setInterval(() => {
+    const inactiveTime = Date.now() - lastActivityTime;
+    if (inactiveTime >= 5 * 60 * 1000) { // 5 minutes
+      debug("Auto-collapsing due to inactivity");
+      checkMessages(1); // Collapse to 1 message
+      clearInterval(autoCollapseTimer);
+      autoCollapseTimer = null;
+    }
+  }, 30000); // Check every 30 seconds
+}
+
+// Track user activity
+document.addEventListener("mousemove", resetActivityTimer);
+document.addEventListener("keydown", resetActivityTimer);
+document.addEventListener("scroll", resetActivityTimer);
+
+// Listen for popup messages
+chrome.runtime.onMessage.addListener(async (msg, sender, sendResponse) => {
+  switch (msg?.type) {
+    case "applySettings":
+      // settings already saved in sync; just reload and apply immediately
+      const oldSettings = { ...state };
+      await loadSettings();
+      
+      // Handle auto-collapse timer changes
+      if (state.autoCollapse && !oldSettings.autoCollapse) {
+        resetActivityTimer();
+      } else if (!state.autoCollapse && autoCollapseTimer) {
+        clearInterval(autoCollapseTimer);
+        autoCollapseTimer = null;
+      }
+      
+      applyPrune();
+      sendResponse?.({ ok: true });
+      return true; // async
+
+    case "refreshPrompt":
+      // Ask to refresh this tab
+      const ok = confirm("ChatGPT Speedup: Detected update. Refresh this tab now?");
+      if (ok) location.reload();
+      return;
+
+    case "getStats":
+      const stats = getStats();
+      sendResponse(stats);
+      return;
+
+    case "exportArchive":
+      const archive = await loadArchive();
+      sendResponse(archive);
+      return;
+
+    case "importArchive":
+      await saveArchive(msg.archive);
+      sendResponse({ ok: true });
+      return;
+
+    case "clearArchive":
+      await saveArchive([]);
+      sendResponse({ ok: true });
+      return;
+
+    case "searchArchive":
+      const query = msg.query.toLowerCase();
+      const stored = await loadArchive();
+      
+      // Search through stored messages
+      const matches = stored.filter(msg => 
+        msg.content.toLowerCase().includes(query));
+      
+      if (matches.length > 0) {
+        debug(`Found ${matches.length} matches for "${query}"`);
+        
+        // Restore matching messages
+        await restoreFromStorage(matches.length);
+        
+        // Highlight matches in restored messages
+        const highlights = document.createElement('style');
+        highlights.textContent = `
+          .search-highlight {
+            background: #fff7d1;
+            border-radius: 2px;
+            transition: background-color 0.3s;
+          }
+        `;
+        document.head.appendChild(highlights);
+        
+        // Find and highlight text in restored messages
+        const messages = getAllTurns();
+        messages.slice(0, matches.length).forEach(el => {
+          const content = el.textContent;
+          if (content.toLowerCase().includes(query)) {
+            const contentEl = el.querySelector('.markdown-content') || el;
+            contentEl.innerHTML = contentEl.innerHTML.replace(
+              new RegExp(query, 'gi'),
+              match => `<mark class="search-highlight">${match}</mark>`
+            );
+          }
+        });
+        
+        // Remove highlights after a delay
+        setTimeout(() => {
+          highlights.remove();
+          document.querySelectorAll('.search-highlight').forEach(el => {
+            el.classList.add('search-highlight-fade');
+          });
+        }, 2000);
+      }
+      
+      sendResponse({ matches: matches.length });
+      return true; // async
+  }
+});

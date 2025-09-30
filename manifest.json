@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT Speedup",
+  "version": "1.0.0",
+  "description": "Improve ChatGPT performance by pruning old messages while keeping full history accessible.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://chat.openai.com/*",
+    "https://chatgpt.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "commands": {
+    "reveal-more": {
+      "description": "Reveal 5 more messages"
+    },
+    "reveal-more-alt": {
+      "description": "Reveal 10 more messages"
+    },
+    "collapse-all": {
+      "description": "Collapse to minimum messages"
+    }
+  }
+}
