@@ -1,5 +1,9 @@
 # ChatGPT Speedup — MV3 Extension
 
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![CI](https://github.com/T30Tom/chatgpt-speedup/actions/workflows/ci.yml/badge.svg)](../../actions)
+
 > Make long ChatGPT chats feel snappy. This extension prunes older messages in the DOM and keeps only the most recent **N** visible (default 5). Older turns are archived either in **storage** or moved to a **hidden container**, and can be restored on demand. All data stays **local** in your browser.
 
 ## ✨ Features
@@ -60,3 +64,4 @@ Issues and PRs welcome!
 - Smarter prune heuristics (skip when user scrolls up)
 - Export/import archives (JSON)
 - Per-conversation profiles
+rnSee: How to cut a releasern
