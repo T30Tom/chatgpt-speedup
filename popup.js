@@ -81,6 +81,18 @@ function downloadJson(data, filename) {
   URL.revokeObjectURL(url);
 }
 
+function downloadText(text, filename) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 async function getCurrentTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0];
@@ -162,11 +174,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Get all elements
   const elements = {
     keepN: document.getElementById("keepN"),
+    keepNPreset: document.getElementById("keepNPreset"),
     mode: document.getElementById("mode"),
     storageCap: document.getElementById("storageCap"),
     apply: document.getElementById("apply"),
     refreshTabs: document.getElementById("refreshTabs"),
     exportArchive: document.getElementById("exportArchive"),
+    exportMenu: document.getElementById("exportMenu"),
     importArchive: document.getElementById("importArchive"),
     clearArchive: document.getElementById("clearArchive"),
     importFile: document.getElementById("importFile"),
@@ -190,6 +204,27 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (elements.autoCollapse) elements.autoCollapse.checked = s.autoCollapse;
   if (elements.pillEnabled) elements.pillEnabled.checked = s.pillEnabled !== false;
   if (elements.themeSelect) elements.themeSelect.value = s.theme || 'auto';
+
+  // keepN preset dropdown handler
+  if (elements.keepNPreset) {
+    elements.keepNPreset.addEventListener('change', () => {
+      const value = elements.keepNPreset.value;
+      if (value) {
+        elements.keepN.value = value;
+      }
+    });
+    
+    // Update preset dropdown when keepN changes manually
+    elements.keepN.addEventListener('input', () => {
+      const currentValue = elements.keepN.value;
+      const presetOptions = ['10', '50', '100', '999999'];
+      if (presetOptions.includes(currentValue)) {
+        elements.keepNPreset.value = currentValue;
+      } else {
+        elements.keepNPreset.value = '';
+      }
+    });
+  }
 
   // Theme change handler
   if (elements.themeSelect) {
@@ -257,20 +292,100 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // Export button
-  if (elements.exportArchive) {
-    elements.exportArchive.addEventListener("click", async () => {
-      if (!tab?.id) return;
+  // Export button with dropdown menu
+  if (elements.exportArchive && elements.exportMenu) {
+    // Toggle dropdown menu
+    elements.exportArchive.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isVisible = elements.exportMenu.style.display === 'block';
+      elements.exportMenu.style.display = isVisible ? 'none' : 'block';
+    });
 
-      const archive = await sendMessage(tab.id, { type: "exportArchive" });
-      if (archive?.error) {
-        showMessage('Export failed: ' + archive.error);
-        return;
+    // Close menu when clicking outside
+    document.addEventListener('click', () => {
+      if (elements.exportMenu) {
+        elements.exportMenu.style.display = 'none';
       }
+    });
 
-      const date = new Date().toISOString().split("T")[0];
-      downloadJson(archive, `chatgpt-archive-${date}.json`);
-      showMessage('Archive exported!', false);
+    // Handle export format selection
+    const exportOptions = document.querySelectorAll('.export-option');
+    exportOptions.forEach(option => {
+      option.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const format = option.getAttribute('data-format');
+        elements.exportMenu.style.display = 'none';
+
+        if (!tab?.id) return;
+
+        // Get all messages
+        const result = await sendMessage(tab.id, { type: "getAllMessagesForExport" });
+        if (result?.error) {
+          showMessage('Export failed: ' + result.error);
+          return;
+        }
+
+        const messages = result.messages || [];
+        const date = new Date().toISOString().split("T")[0];
+        const filename = `chatgpt-conversation-${date}`;
+
+        // Export based on format
+        switch (format) {
+          case 'json':
+            downloadJson({ messages, exportDate: new Date().toISOString(), messageCount: messages.length }, `${filename}.json`);
+            showMessage('Exported as JSON!', false);
+            break;
+
+          case 'markdown':
+            const markdown = messages.map((msg, idx) => {
+              const role = idx % 2 === 0 ? '**You:**' : '**ChatGPT:**';
+              return `${role}\n\n${msg}\n\n---\n`;
+            }).join('\n');
+            downloadText(markdown, `${filename}.md`);
+            showMessage('Exported as Markdown!', false);
+            break;
+
+          case 'txt':
+            const text = messages.map((msg, idx) => {
+              const role = idx % 2 === 0 ? 'You:' : 'ChatGPT:';
+              return `${role}\n${msg}\n\n${'='.repeat(60)}\n`;
+            }).join('\n');
+            downloadText(text, `${filename}.txt`);
+            showMessage('Exported as Text!', false);
+            break;
+
+          case 'html':
+            const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ChatGPT Conversation - ${date}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; line-height: 1.6; }
+    .message { margin: 20px 0; padding: 15px; border-radius: 8px; }
+    .user { background: #e3f2fd; }
+    .assistant { background: #f5f5f5; }
+    .role { font-weight: bold; margin-bottom: 8px; }
+    .content { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>ChatGPT Conversation</h1>
+  <p>Exported: ${new Date().toLocaleDateString()}</p>
+  ${messages.map((msg, idx) => {
+    const isUser = idx % 2 === 0;
+    return `<div class="message ${isUser ? 'user' : 'assistant'}">
+      <div class="role">${isUser ? 'You' : 'ChatGPT'}</div>
+      <div class="content">${msg.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+    </div>`;
+  }).join('\n')}
+</body>
+</html>`;
+            downloadText(html, `${filename}.html`);
+            showMessage('Exported as HTML!', false);
+            break;
+        }
+      });
     });
   }
 

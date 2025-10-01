@@ -10,9 +10,21 @@
     <h3>ChatGPT Speedup</h3>
 
     <label for="keepN">Messages to keep visible</label>
-    <input id="keepN" type="number" min="1" step="1" />
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <input id="keepN" type="number" min="1" step="1" style="flex: 1;" />
+      <select id="keepNPreset" style="flex: 1;">
+        <option value="">Custom</option>
+        <option value="10">10 messages</option>
+        <option value="50">50 messages</option>
+        <option value="100">100 messages</option>
+        <option value="999999">Show All</option>
+      </select>
+    </div>
 
-    <label for="mode">Archive mode</label>
+    <label for="mode">
+      Archive mode
+      <span class="info-icon" title="Storage mode: Serializes messages to browser storage (uses less memory).&#10;Hidden mode: Keeps messages in hidden DOM (faster access but uses more memory).">ⓘ</span>
+    </label>
     <select id="mode">
       <option value="storage">Serialize to storage (lighter)</option>
       <option value="hidden">Move to hidden DOM (faster)</option>
@@ -62,7 +74,15 @@
     </div>
 
     <div class="row-3">
-      <button id="exportArchive" title="Export archived messages">Export</button>
+      <div style="position: relative; display: inline-block;">
+        <button id="exportArchive" title="Export conversation">Export ▼</button>
+        <div id="exportMenu" class="export-menu" style="display: none;">
+          <button class="export-option" data-format="json">JSON</button>
+          <button class="export-option" data-format="markdown">Markdown</button>
+          <button class="export-option" data-format="txt">Text</button>
+          <button class="export-option" data-format="html">HTML</button>
+        </div>
+      </div>
       <button id="importArchive" title="Import archived messages">Import</button>
       <button id="clearArchive" title="Clear archived messages">Clear</button>
       <input type="file" id="importFile" accept=".json" style="display:none">

@@ -36,7 +36,17 @@ async function loadSettings() {
 
 async function saveSettings(partial) {
   Object.assign(state, partial);
-  await chrome.storage.sync.set({ [settingsKey()]: state });
+  try {
+    await chrome.storage.sync.set({ [settingsKey()]: state });
+  } catch (error) {
+    // Handle extension context invalidation (common in Opera/some browsers)
+    if (error.message?.includes('Extension context invalidated')) {
+      debug("Extension context invalidated - settings not saved. Please reload the page.");
+      console.warn("ChatGPT Speedup: Extension context invalidated. Settings will apply but won't persist. Reload the page to fix.");
+    } else {
+      console.error("ChatGPT Speedup: Error saving settings:", error);
+    }
+  }
 }
 
 function getAllMessages() {
@@ -275,6 +285,10 @@ function applyPruning() {
   
   debug(`Pruning: ${pairs.length} total pairs, keeping ${keep} visible`);
   
+  // Save scroll position before pruning to prevent auto-scroll to top
+  const scrollableEl = document.querySelector('main') || window;
+  const savedScrollTop = scrollableEl.scrollTop || window.scrollY || 0;
+  
   // First, show all messages
   hiddenMessages.forEach(msg => {
     if (msg && msg.style) {
@@ -304,6 +318,17 @@ function applyPruning() {
   }
   
   updatePill();
+  
+  // Restore scroll position after pruning
+  setTimeout(() => {
+    if (scrollableEl.scrollTo) {
+      scrollableEl.scrollTo({ top: savedScrollTop, behavior: 'instant' });
+    } else if (scrollableEl === window) {
+      window.scrollTo({ top: savedScrollTop, behavior: 'instant' });
+    } else {
+      scrollableEl.scrollTop = savedScrollTop;
+    }
+  }, 10);
   
   // Re-setup top message observer after pruning changes
   if (typeof window.chatgptSpeedupSetupTopObserver === 'function') {
@@ -861,6 +886,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       clearSearchHighlights();
       sendResponse({ ok: true });
       return true;
+      
+    case "getAllMessagesForExport": {
+      const allTurns = getAllMessages();
+      const messages = allTurns.map(turn => {
+        return turn.textContent || turn.innerText || '';
+      }).filter(text => text.length > 0);
+      
+      sendResponse({ messages });
+      return true;
+    }
       
     case "refreshPrompt":
       if (confirm("Refresh page to reload extension?")) {

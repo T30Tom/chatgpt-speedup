@@ -142,3 +142,61 @@ button#apply {
   gap: 8px;
   margin: 8px 0;
 }
+
+/* Info icon tooltip */
+.info-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  font-weight: bold;
+  cursor: help;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.info-icon:hover {
+  background: #0055aa;
+}
+
+/* Export menu dropdown */
+.export-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--button-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  min-width: 120px;
+}
+
+.export-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 13px;
+}
+
+.export-option:first-child {
+  border-radius: 6px 6px 0 0;
+}
+
+.export-option:last-child {
+  border-radius: 0 0 6px 6px;
+}
+
+.export-option:hover {
+  background: var(--button-hover);
+}
