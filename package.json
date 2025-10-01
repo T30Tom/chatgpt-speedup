@@ -1,0 +1,16 @@
+{
+  "name": "chatgpt-speedup",
+  "version": "0.1.0",
+  "private": true,
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@eslint/json": "^0.13.2",
+    "eslint": "^9.36.0",
+    "globals": "^16.4.0"
+  },
+  "scripts": {
+    "lint": "eslint . --ext .js",
+    "lint:fix": "eslint . --ext .js --fix",
+    "build:zip": "powershell -Command \"New-Item -ItemType Directory -Force dist; git ls-files | Compress-Archive -DestinationPath dist/chatgpt-speedup.zip -Force\""
+  }
+}

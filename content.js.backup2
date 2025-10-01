@@ -1,0 +1,943 @@
+/* eslint-disable no-redeclare, no-case-declarations */
+/**
+ * ChatGPT Speedup content script
+ * Keeps only last N visible messages (default 5)
+ * Older moves to storage (default) or hidden container
+ * Bottom-right pill shows visible/total message count
+ * Click: +5 messages, Shift+Click: +10, Alt+Click: collapse
+ */
+
+const DEFAULTS = {
+  keepN: 5,
+  mode: "storage",
+  storageCap: 200,
+  debugLogs: false,
+  autoCollapse: false,
+  selectors: {
+    message: "li[data-message-author-role], [data-testid*='conversation-turn']",
+    content: ".markdown-content, .content",
+    roleAttr: "data-message-author-role"
+  }
+};
+
+let state = {
+  keepN: DEFAULTS.keepN,
+  mode: DEFAULTS.mode,
+  storageCap: DEFAULTS.storageCap,
+  debugLogs: DEFAULTS.debugLogs,
+  autoCollapse: DEFAULTS.autoCollapse,
+  selectors: DEFAULTS.selectors,
+  totalCount: 0,
+  visibleCount: 0,
+  isReady: false
+};
+
+let pillEl = null;
+let hiddenArchiveEl = null;
+let observer = null;
+let debouncedApply = null;
+let lastStoredCount = 0;
+let isContentScriptReady = false;
+
+// User activity tracking
+let lastActivityTime = Date.now();
+let autoCollapseTimer = null;
+
+// Scroll tracking
+let isScrolling = false;
+let scrollTimeout;
+let lastScrollTop = 0;
+let isScrollingUp = false;
+
+// Debug logging helper
+function debug(...args) {
+  if (state?.debugLogs) {
+    console.log("[ChatGPT Speedup]", ...args);
+  }
+}
+
+// Keys per conversation
+function getConversationId() {
+  try {
+    const m = location.pathname.match(/\/c\/([a-f0-9-]{10,})/i);
+    return m ? m[1] : location.pathname || "root";
+  } catch {
+    return "root";
+  }
+}
+
+function storageKey(convId) {
+  return `chat_pruner_archive::${convId}`;
+}
+
+function settingsKey() {
+  return `chat_pruner_settings`;
+}
+
+async function loadSettings() {
+  const { [settingsKey()]: s } = await chrome.storage.sync.get(settingsKey());
+  if (s && typeof s === "object") {
+    state.keepN = Number.isFinite(s.keepN) ? s.keepN : DEFAULTS.keepN;
+    state.mode = (s.mode === "hidden" || s.mode === "storage") ? s.mode : DEFAULTS.mode;
+    state.storageCap = Number.isFinite(s.storageCap) ? s.storageCap : DEFAULTS.storageCap;
+    state.debugLogs = s.debugLogs || DEFAULTS.debugLogs;
+    state.autoCollapse = s.autoCollapse || DEFAULTS.autoCollapse;
+    state.selectors = s.selectors || DEFAULTS.selectors;
+  }
+}
+
+async function saveSettings(partial) {
+  Object.assign(state, partial);
+  await chrome.storage.sync.set({
+    [settingsKey()]: { 
+      keepN: state.keepN, 
+      mode: state.mode,
+      storageCap: state.storageCap,
+      debugLogs: state.debugLogs,
+      autoCollapse: state.autoCollapse,
+      selectors: state.selectors
+    }
+  });
+}
+
+function savePillPosition(x, y) {
+  chrome.storage.sync.set({
+    'pill_position': { x, y }
+  });
+}
+
+async function loadPillPosition() {
+  const { pill_position } = await chrome.storage.sync.get('pill_position');
+  return pill_position || { x: null, y: null };
+}
+
+// === PILL DRAG VARIABLES (add at top with other globals) ===
+let isDragging = false;
+let dragStart = null;
+
+function ensurePill() {
+  if (pillEl && document.body.contains(pillEl)) return pillEl;
+  
+  pillEl = document.createElement("div");
+  pillEl.id = "chat-pruner-pill";
+  pillEl.innerHTML = `<span class="pill-text">waiting…</span>`;
+  pillEl.title = "Click: +5 • Shift: −5 • Alt+drag: move";
+  
+  loadPillPosition().then(({ x, y }) => {
+    if (x !== null && y !== null) {
+      pillEl.style.right = null;
+      pillEl.style.bottom = null;
+      pillEl.style.left = `${x}px`;
+      pillEl.style.top = `${y}px`;
+    }
+  });
+
+  let isDragging = false;
+  let startX, startY, startLeft, startTop;
+
+  pillEl.addEventListener("click", (_e) => {
+    if (isDragging || _e.altKey) {
+      _e.preventDefault();
+      return;
+    }
+    
+    _e.preventDefault();
+    _e.stopPropagation();
+    
+    console.log("[ChatGPT Speedup] Click detected, shift:", _e.shiftKey);
+    
+    if (_e.shiftKey) {
+      const target = Math.max(1, (state.visibleCount || 5) - 5);
+      revealExact(target);
+    } else {
+      revealMore(5);
+    }
+  });
+
+  pillEl.addEventListener("mousedown", (_e) => {
+    if (!_e.altKey) return;
+    if (_e.button !== 0) return;
+    
+    isDragging = true;
+    pillEl.classList.add("dragging");
+    
+    const rect = pillEl.getBoundingClientRect();
+    startX = _e.clientX;
+    startY = _e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    
+    _e.preventDefault();
+    _e.stopPropagation();
+  });
+
+  const onMouseMove = (_e) => {
+    if (!isDragging) return;
+    
+    const deltaX = _e.clientX - startX;
+    const deltaY = _e.clientY - startY;
+    
+    const newLeft = startLeft + deltaX;
+    const newTop = startTop + deltaY;
+    
+    pillEl.style.right = null;
+    pillEl.style.bottom = null;
+    pillEl.style.left = `${newLeft}px`;
+    pillEl.style.top = `${newTop}px`;
+  };
+
+  const onMouseUp = (_e) => {
+    if (!isDragging) return;
+    
+    setTimeout(() => {
+      isDragging = false;
+      pillEl.classList.remove("dragging");
+    }, 100);
+    
+    const rect = pillEl.getBoundingClientRect();
+    savePillPosition(rect.left, rect.top);
+  };
+
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
+
+  document.body.appendChild(pillEl);
+  return pillEl;
+}
+
+// === ADD THESE NEW DRAG HANDLER FUNCTIONS ===
+function _onPillMouseDown(_e) {
+  if (!_e.altKey) return; // only start drag if Alt is held
+  _e.preventDefault();
+  _e.stopPropagation();
+
+  const rect = pillEl.getBoundingClientRect();
+  dragStart = {
+    x: _e.clientX,
+    y: _e.clientY,
+    left: rect.left + window.scrollX,
+    top: rect.top + window.scrollY
+  };
+  isDragging = true;
+  pillEl.dataset.dragging = "true";
+
+  window.addEventListener("mousemove", onPillMouseMove, { passive: false });
+  window.addEventListener("mouseup", onPillMouseUp, { passive: false });
+}
+
+function onPillMouseMove(_e) {
+  if (!isDragging) return;
+  _e.preventDefault();
+
+  const dx = _e.clientX - dragStart.x;
+  const dy = _e.clientY - dragStart.y;
+
+  const newLeft = Math.max(4, dragStart.left + dx);
+  const newTop = Math.max(4, dragStart.top + dy);
+
+  // Position by left/top to avoid layout jumps
+  pillEl.style.left = newLeft + "px";
+  pillEl.style.top = newTop + "px";
+  pillEl.style.right = "auto";
+  pillEl.style.bottom = "auto";
+}
+
+function onPillMouseUp(_e) {
+  if (!isDragging) return;
+  _e.preventDefault();
+
+  isDragging = false;
+  pillEl.dataset.dragging = "false";
+  window.removeEventListener("mousemove", onPillMouseMove);
+  window.removeEventListener("mouseup", onPillMouseUp);
+
+  // Persist the position
+  const rect = pillEl.getBoundingClientRect();
+  const data = {
+    x: Math.round(rect.left + window.scrollX),
+    y: Math.round(rect.top + window.scrollY)
+  };
+  chrome.storage.sync.set({ chat_pruner_pill_pos: data });
+}
+
+
+
+// === UPDATE revealMore() to support negative values ===
+async function revealMore(delta) {
+  const _current = getAllTurns();
+  const currentVisible = _current.length;
+  const target = Math.max(1, currentVisible + delta);
+  
+  debug(`RevealMore: delta=${delta}, _current=${currentVisible}, target=${target}`);
+  
+  await revealExact(target);
+}
+
+// === UPDATE revealExact() to ensure min 1 ===
+async function revealExact(targetVisible) {
+  targetVisible = Math.max(1, targetVisible); // Ensure at least 1
+  const _current = getAllTurns();
+  let need = Math.max(0, targetVisible - _current.length);
+  
+  if (need === 0) {
+    state.keepN = Math.max(1, targetVisible);
+    await saveSettings({ keepN: state.keepN });
+    applyPrune();
+    return;
+  }
+  
+  if (state.mode === "hidden") {
+    const restored = await restoreFromHidden(need);
+    need -= restored;
+    if (need > 0) await restoreFromStorage(need);
+  } else {
+    const restored = await restoreFromStorage(need);
+    need -= restored;
+    if (need > 0) await restoreFromHidden(need);
+  }
+  
+  state.keepN = Math.max(1, targetVisible);
+  await saveSettings({ keepN: state.keepN });
+  applyPrune();
+}
+
+// === REMOVE old position saving/loading code ===
+// Delete the old savePillPosition() and loadPillPosition() functions
+// since we're now using chrome.storage.sync directly in the drag handlers
+
+function ensureHiddenArchive() {
+  hiddenArchiveEl = document.getElementById("chat-pruner-hidden-archive");
+  if (!hiddenArchiveEl) {
+    hiddenArchiveEl = document.createElement("div");
+    hiddenArchiveEl.id = "chat-pruner-hidden-archive";
+    document.body.appendChild(hiddenArchiveEl);
+  }
+  return hiddenArchiveEl;
+}
+
+function getAllTurns() {
+  const messageSelectors = (state.selectors?.message || DEFAULTS.selectors.message).split(',').map(s => s.trim());
+  const all = [];
+  
+  for (const selector of messageSelectors) {
+    try {
+      const elements = Array.from(document.querySelectorAll(selector));
+      all.push(...elements);
+    } catch (_e) {
+      debug('Invalid selector:', selector, _e);
+    }
+  }
+  
+  const uniqueAll = Array.from(new Set(all));
+  
+  const filtered = uniqueAll.filter((el) => {
+    if (!el || !el.isConnected) return false;
+    // Skip if it's in the composer/input area
+    if (el.closest('[data-testid="composer"]')) return false;
+    if (el.closest('form')) return false;
+    if (el.querySelector('textarea, input[type="text"], [contenteditable="true"]')) return false;
+    
+    // Only count actual conversation turns (skip duplicates or system messages)
+    const role = el.getAttribute('data-message-author-role');
+    if (role && (role === 'user' || role === 'assistant')) {
+      return true;
+    }
+    
+    // Fallback: check if it looks like a message
+    const hasContent = el.querySelector('.markdown-content, .content, [data-message-content]');
+    return !!hasContent;
+  });
+
+  filtered.sort((n1, n2) => {
+    if (n1 === n2) return 0;
+    const pos = n1.compareDocumentPosition(n2);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+
+  return filtered;
+}
+
+function getTurnsContainer() {
+  const turns = getAllTurns();
+  if (turns.length === 0) return document.body;
+  return turns[0].parentElement || document.body;
+}
+
+async function loadArchive() {
+  const convId = getConversationId();
+  const key = storageKey(convId);
+  const { [key]: archived } = await chrome.storage.local.get(key);
+  return archived && Array.isArray(archived.messages) ? archived.messages : [];
+}
+
+async function saveArchive(messagesArray) {
+  const convId = getConversationId();
+  const key = storageKey(convId);
+  await chrome.storage.local.set({ [key]: { messages: messagesArray } });
+}
+
+async function updatePill(turns) {
+  const pill = ensurePill();
+  const textSpan = pill.querySelector(".pill-text");
+  
+  const visible = turns.length;
+  state.visibleCount = visible;
+
+  const archived = await loadArchive().catch(() => []);
+  lastStoredCount = archived.length;
+  const hiddenCount = hiddenArchiveEl ? hiddenArchiveEl.childElementCount : 0;
+  const total = visible + hiddenCount + lastStoredCount;
+  state.totalCount = total;
+
+  const hiddenTotal = hiddenCount + lastStoredCount;
+  const hiddenPercentage = total > 0 ? (hiddenTotal / total) * 100 : 0;
+
+  if (hiddenTotal === 0) {
+    pill.setAttribute('data-prune-level', 'none');
+  } else if (hiddenPercentage < 33) {
+    pill.setAttribute('data-prune-level', 'low');
+  } else if (hiddenPercentage < 66) {
+    pill.setAttribute('data-prune-level', 'medium');
+  } else {
+    pill.setAttribute('data-prune-level', 'high');
+  }
+
+  if (textSpan) {
+    textSpan.textContent = (visible === 0) ? "waiting…" : `${visible}/${total}`;
+  } else {
+    pill.innerHTML = `<span class="pill-text">${(visible === 0) ? "waiting…" : `${visible}/${total}`}</span>`;
+  }
+}
+
+function animateCollapse(el) {
+  return new Promise(resolve => {
+    const height = el.offsetHeight;
+    const marginTop = parseInt(window.getComputedStyle(el).marginTop);
+    const _marginBottom = parseInt(window.getComputedStyle(el)._marginBottom);
+    
+    el.style.setProperty('--chat-height', `${height}px`);
+    el.style.setProperty('--chat-margin', `${marginTop}px`);
+    
+    el.classList.add('chat-pruner-collapsing');
+    
+    el.addEventListener('animationend', () => {
+      el.classList.remove('chat-pruner-collapsing');
+      resolve();
+    }, { once: true });
+  });
+}
+
+function animateExpand(el) {
+  return new Promise(resolve => {
+    el.style.visibility = 'hidden';
+    el.style.position = 'absolute';
+    document.body.appendChild(el);
+    const height = el.offsetHeight;
+    const marginTop = parseInt(window.getComputedStyle(el).marginTop);
+    const _marginBottom = parseInt(window.getComputedStyle(el)._marginBottom);
+    el.remove();
+    el.style.visibility = '';
+    el.style.position = '';
+    
+    el.style.setProperty('--chat-height', `${height}px`);
+    el.style.setProperty('--chat-margin', `${marginTop}px`);
+    
+    el.classList.add('chat-pruner-expanding');
+    
+    el.addEventListener('animationend', () => {
+      el.classList.remove('chat-pruner-expanding');
+      resolve();
+    }, { once: true });
+  });
+}
+
+async function prune(turns) {
+  const keep = Math.max(1, Number(state.keepN) || DEFAULTS.keepN);
+  if (turns.length <= keep) return;
+
+  const toArchive = turns.slice(0, turns.length - keep);
+  
+  await Promise.all(toArchive.map(el => animateCollapse(el)));
+
+  if (state.mode === "hidden") {
+    ensureHiddenArchive();
+    for (const el of toArchive) {
+      if (el.isConnected) hiddenArchiveEl.appendChild(el);
+    }
+    return;
+  }
+  
+  // Storage mode: serialize as objects
+  const serialized = toArchive.map(el => {
+    const roleAttr = state.selectors?.roleAttr || DEFAULTS.selectors.roleAttr;
+    const contentSelector = state.selectors?.content || DEFAULTS.selectors.content;
+    
+    const role = el.getAttribute(roleAttr) || 'unknown';
+    const content = el.querySelector(contentSelector)?.textContent || el.textContent || '';
+    const timestamp = Date.now();
+    const html = el.outerHTML;
+    
+    return { role, content, timestamp, html };
+  });
+  
+  toArchive.forEach((el) => el.remove());
+
+  loadArchive().then((existing) => {
+    const storageCap = state.storageCap || DEFAULTS.storageCap;
+    const messages = existing.concat(serialized);
+    const trimmed = messages.slice(-storageCap);
+    saveArchive(trimmed);
+  });
+}
+
+async function restoreFromHidden(count) {
+  ensureHiddenArchive();
+  const toRestore = [];
+  
+  while (hiddenArchiveEl.lastElementChild && toRestore.length < count) {
+    toRestore.push(hiddenArchiveEl.lastElementChild);
+    hiddenArchiveEl.removeChild(hiddenArchiveEl.lastElementChild);
+  }
+  
+  if (toRestore.length === 0) return 0;
+
+  const container = getTurnsContainer();
+  const _current = getAllTurns();
+  const anchor = _current[0];
+
+  debug(`Restoring ${toRestore.length} messages from hidden archive`);
+  
+  toRestore.reverse();
+  const insertedElements = [];
+  
+  for (const el of toRestore) {
+    try {
+      el.style.opacity = '0';
+      el.style.transition = 'all 0.3s ease-out';
+      el.style.backgroundColor = '#f0f4ff';
+      container.insertBefore(el, anchor || null);
+      insertedElements.push(el);
+    } catch (_e) {
+      debug('Error inserting element:', _e);
+    }
+  }
+
+  await Promise.all(insertedElements.map(el => animateExpand(el)));
+  
+  if (insertedElements[0]) {
+    insertedElements[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    
+    setTimeout(() => {
+      insertedElements.forEach(el => {
+        el.style.backgroundColor = '';
+      });
+    }, 1500);
+  }
+  
+  return toRestore.length;
+}
+
+async function restoreFromStorage(count) {
+  const archived = await loadArchive();
+  if (!archived.length) return 0;
+  
+  const take = Math.min(count, archived.length);
+  const slice = archived.slice(-take);
+  const remaining = archived.slice(0, archived.length - take);
+
+  const container = getTurnsContainer();
+  const _current = getAllTurns();
+  const anchor = _current[0];
+  const insertedElements = [];
+
+  for (const msg of slice) {
+    try {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = msg.html || '';
+      const el = wrapper.firstElementChild;
+      
+      if (el) {
+        el.style.opacity = '0';
+        el.style.transition = 'all 0.3s ease-out';
+        el.style.backgroundColor = '#f0f4ff';
+        
+        container.insertBefore(el, anchor || null);
+        insertedElements.push(el);
+      }
+    } catch (_e) {
+      debug('Error restoring from storage:', _e);
+    }
+  }
+
+  await Promise.all(insertedElements.map(el => animateExpand(el)));
+  
+  if (insertedElements[0]) {
+    insertedElements[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    
+    setTimeout(() => {
+      insertedElements.forEach(el => {
+        el.style.backgroundColor = '';
+      });
+    }, 1500);
+  }
+  
+  await saveArchive(remaining);
+  return insertedElements.length;
+}
+
+async function revealMore(delta) {
+  const _current = getAllTurns();
+  const target = state.visibleCount + delta;
+  await revealExact(target);
+}
+
+async function revealExact(targetVisible) {
+  const _current = getAllTurns();
+  let need = Math.max(0, targetVisible - _current.length);
+  
+  if (need === 0) {
+    state.keepN = Math.max(1, targetVisible);
+    await saveSettings({ keepN: state.keepN });
+    applyPrune();
+    return;
+  }
+  
+  if (state.mode === "hidden") {
+    const restored = await restoreFromHidden(need);
+    need -= restored;
+    if (need > 0) await restoreFromStorage(need);
+  } else {
+    const restored = await restoreFromStorage(need);
+    need -= restored;
+    if (need > 0) await restoreFromHidden(need);
+  }
+  
+  state.keepN = Math.max(1, targetVisible);
+  await saveSettings({ keepN: state.keepN });
+  applyPrune();
+}
+
+function applyPrune() {
+  const turns = getAllTurns();
+  prune(turns);
+  updatePill(getAllTurns());
+}
+
+function debounced(fn, ms = 300) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+function handleScroll() {
+  if (!isScrolling) {
+    isScrolling = true;
+  }
+  
+  clearTimeout(scrollTimeout);
+  
+  const st = window.pageYOffset || document.documentElement.scrollTop;
+  isScrollingUp = st < lastScrollTop;
+  lastScrollTop = st;
+
+  scrollTimeout = setTimeout(() => {
+    isScrolling = false;
+    if (isScrollingUp) {
+      setTimeout(() => {
+        if (!isScrolling) {
+          debouncedApply();
+        }
+      }, 500);
+    } else {
+      debouncedApply();
+    }
+  }, 150);
+}
+
+function startObserving() {
+  if (observer) observer.disconnect();
+  
+  observer = new MutationObserver(() => {
+    if (!isScrolling || !isScrollingUp) {
+      debouncedApply();
+    }
+  });
+  
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true
+  });
+
+  window.addEventListener('scroll', handleScroll, { passive: true });
+}
+
+function detectDarkMode() {
+  return (
+    document.documentElement.getAttribute('data-theme') === 'dark' ||
+    document.documentElement.classList.contains('dark') ||
+    document.body.classList.contains('dark') ||
+    window.matchMedia('(prefers-color-scheme: dark)').matches
+  );
+}
+
+function watchThemeChanges() {
+  const observer = new MutationObserver(() => {
+    const isDark = detectDarkMode();
+    document.documentElement.classList.toggle('chat-pruner-dark', isDark);
+  });
+
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['class', 'data-theme']
+  });
+
+  window.matchMedia('(prefers-color-scheme: dark)').addListener(() => {
+    const isDark = detectDarkMode();
+    document.documentElement.classList.toggle('chat-pruner-dark', isDark);
+  });
+}
+
+function resetActivityTimer() {
+  lastActivityTime = Date.now();
+  if (state?.autoCollapse && !autoCollapseTimer) {
+    startAutoCollapseTimer();
+  }
+}
+
+function startAutoCollapseTimer() {
+  if (autoCollapseTimer) clearInterval(autoCollapseTimer);
+  if (!state?.autoCollapse) return;
+
+  autoCollapseTimer = setInterval(() => {
+    if (state?.mode === "hidden") {
+      clearInterval(autoCollapseTimer);
+      autoCollapseTimer = null;
+      return;
+    }
+
+    const inactiveTime = Date.now() - lastActivityTime;
+    if (inactiveTime >= 5 * 60 * 1000) {
+      debug("Auto-collapsing due to inactivity");
+      revealExact(1);
+      clearInterval(autoCollapseTimer);
+      autoCollapseTimer = null;
+    }
+  }, 30000);
+}
+
+async function init() {
+  await loadSettings();
+  ensurePill();
+  ensureHiddenArchive();
+  debouncedApply = debounced(applyPrune, 750);
+  startObserving();
+  
+  const isDark = detectDarkMode();
+  document.documentElement.classList.toggle('chat-pruner-dark', isDark);
+  watchThemeChanges();
+
+  const tryStart = () => {
+    const turns = getAllTurns();
+    if (turns.length === 0) {
+      ensurePill();
+      updatePill(turns);
+      setTimeout(tryStart, 600);
+      return;
+    }
+    state.isReady = true;
+    applyPrune();
+  };
+  tryStart();
+}
+
+// Track user activity
+document.addEventListener("mousemove", resetActivityTimer);
+document.addEventListener("keydown", resetActivityTimer);
+document.addEventListener("scroll", resetActivityTimer);
+
+// Cleanup
+window.addEventListener("unload", () => {
+  if (autoCollapseTimer) {
+    clearInterval(autoCollapseTimer);
+    autoCollapseTimer = null;
+  }
+});
+
+// Mark ready
+window.addEventListener('load', () => {
+  isContentScriptReady = true;
+  debug('Content script ready');
+});
+
+// Message listener
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg?.type) return;
+  
+  if (msg.type === "ping") {
+    sendResponse({ ok: isContentScriptReady });
+    return;
+  }
+  
+  if (!isContentScriptReady && msg.type !== "ping") {
+    sendResponse({ error: "Content script not ready" });
+    return;
+  }
+
+  switch (msg.type) {
+    case "applySettings":
+      (async () => {
+        try {
+          const oldSettings = { ...state };
+          await loadSettings();
+          
+          if (state.autoCollapse && !oldSettings.autoCollapse) {
+            resetActivityTimer();
+          } else if (!state.autoCollapse && autoCollapseTimer) {
+            clearInterval(autoCollapseTimer);
+            autoCollapseTimer = null;
+          }
+          
+          debug("Applying new settings:", state);
+          applyPrune();
+          sendResponse({ ok: true });
+        } catch (error) {
+          console.error("Error applying settings:", error);
+          sendResponse({ error: error.message });
+        }
+      })();
+      return true;
+
+    case "refreshPrompt":
+      const ok = confirm("ChatGPT Speedup: Detected update. Refresh this tab now?");
+      if (ok) location.reload();
+      sendResponse({ ok: true });
+      return;
+
+    case "command":
+      switch (msg.command) {
+        case "reveal-more":
+          revealMore(5);
+          break;
+        case "reveal-more-alt":
+          revealMore(10);
+          break;
+        case "collapse-all":
+          revealExact(1);
+          break;
+      }
+      return;
+
+    case "getStats":
+      const turns = getAllTurns();
+      const visible = turns.length;
+      const archived = lastStoredCount + (hiddenArchiveEl ? hiddenArchiveEl.childElementCount : 0);
+      const total = visible + archived;
+      sendResponse({ visible, total, archived });
+      return;
+
+    case "exportArchive":
+      loadArchive().then(archive => {
+        const convId = getConversationId();
+        sendResponse({
+          id: convId,
+          timestamp: Date.now(),
+          messages: archive,
+          settings: state
+        });
+      });
+      return true;
+
+    case "importArchive":
+      const archive = msg.archive;
+      if (archive?.messages) {
+        saveArchive(archive.messages).then(() => {
+          lastStoredCount = archive.messages.length;
+          applyPrune();
+          sendResponse({ ok: true });
+        });
+      }
+      return true;
+
+    case "clearArchive":
+      saveArchive([]).then(() => {
+        lastStoredCount = 0;
+        applyPrune();
+        sendResponse({ ok: true });
+      });
+      return true;
+
+    case "searchArchive":
+      (async () => {
+        const query = msg.query.toLowerCase();
+        const stored = await loadArchive();
+        
+        const matches = stored.filter(msg => 
+          msg.content?.toLowerCase().includes(query)
+        );
+        
+        if (matches.length > 0) {
+          debug(`Found ${matches.length} matches for "${query}"`);
+          
+          await restoreFromStorage(matches.length);
+          
+          const highlights = document.createElement('style');
+          highlights.textContent = `
+            .search-highlight {
+              background: #fff7d1;
+              border-radius: 2px;
+              transition: background-color 0.3s;
+            }
+          `;
+          document.head.appendChild(highlights);
+          
+          const messages = getAllTurns();
+          messages.slice(0, matches.length).forEach(el => {
+            const content = el.textContent;
+            if (content.toLowerCase().includes(query)) {
+              const contentEl = el.querySelector(state.selectors?.content || DEFAULTS.selectors.content) || el;
+              const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+              contentEl.innerHTML = contentEl.innerHTML.replace(
+                regex,
+                match => `<mark class="search-highlight">${match}</mark>`
+              );
+            }
+          });
+          
+          setTimeout(() => {
+            highlights.remove();
+            document.querySelectorAll('.search-highlight').forEach(el => {
+              el.classList.remove('search-highlight');
+            });
+          }, 3000);
+        }
+        
+        sendResponse({ matches: matches.length });
+      })();
+      return true;
+  }
+});
+
+// Storage changes
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "sync") return;
+  if (changes[settingsKey()]) {
+    const newVal = changes[settingsKey()].newValue || {};
+    state.keepN = Number.isFinite(newVal.keepN) ? newVal.keepN : state.keepN;
+    state.mode = newVal.mode || state.mode;
+    state.storageCap = Number.isFinite(newVal.storageCap) ? newVal.storageCap : state.storageCap;
+    state.debugLogs = newVal.debugLogs || state.debugLogs;
+    state.autoCollapse = newVal.autoCollapse || state.autoCollapse;
+    state.selectors = newVal.selectors || state.selectors;
+    applyPrune();
+  }
+});
+
+init();
+
+/* eslint-enable no-redeclare, no-case-declarations */
+
+
