@@ -315,6 +315,7 @@ function applyPruning() {
 function setupScrollDetection() {
   let scrollTimeout;
   let hasTriggeredAtTop = false;
+  let scrollListenersAdded = false;
   
   // Find the actual scrollable element in ChatGPT
   function getScrollableElement() {
@@ -337,6 +338,9 @@ function setupScrollDetection() {
   }
   
   const handleScroll = (event) => {
+    // Only process if we have hidden messages
+    if (hiddenMessages.size === 0) return;
+    
     clearTimeout(scrollTimeout);
     
     scrollTimeout = setTimeout(() => {
@@ -344,8 +348,6 @@ function setupScrollDetection() {
       const scrollEl = event?.target?.scrollTop !== undefined ? event.target : getScrollableElement();
       const currentScroll = scrollEl.scrollTop || 0;
       const scrollingUp = currentScroll < lastScrollPosition;
-      
-      debug(`Scroll event: ${currentScroll}px, was: ${lastScrollPosition}px, scrollingUp: ${scrollingUp}, hidden: ${hiddenMessages.size}`);
       
       lastScrollPosition = currentScroll;
       
@@ -372,38 +374,40 @@ function setupScrollDetection() {
         // Reset trigger when scrolling away from top
         hasTriggeredAtTop = false;
       }
-    }, 150); // Debounce
+    }, 200); // Increased debounce for better performance
   };
   
   // Listen to scroll on multiple possible containers
-  window.addEventListener('scroll', handleScroll, { passive: true, capture: true });
-  
-  // Also listen to the main container specifically
   const tryAddScrollListener = () => {
+    if (scrollListenersAdded) return;
+    
     const main = document.querySelector('main');
     if (main) {
-      debug(`Found main container, adding scroll listener. ScrollHeight: ${main.scrollHeight}, ClientHeight: ${main.clientHeight}`);
+      debug(`Adding scroll listener to main container`);
       main.addEventListener('scroll', handleScroll, { passive: true });
+      scrollListenersAdded = true;
     }
     
-    // Also try other potential scroll containers
-    const scrollContainers = document.querySelectorAll('[class*="scroll"], .overflow-auto, .overflow-y-auto');
-    scrollContainers.forEach(container => {
-      if (container.scrollHeight > container.clientHeight) {
-        debug(`Found scrollable container: ${container.className || container.tagName}`);
-        container.addEventListener('scroll', handleScroll, { passive: true });
-      }
-    });
+    // Fallback to window scroll
+    window.addEventListener('scroll', handleScroll, { passive: true });
   };
   
   // Try immediately and after a delay (for dynamic content)
   tryAddScrollListener();
   setTimeout(tryAddScrollListener, 1000);
-  setTimeout(tryAddScrollListener, 3000);
   
-  // Alternative method: Use IntersectionObserver to detect when top message is visible
+  // Alternative method: Use IntersectionObserver only when scroll doesn't work
   let topObserver = null;
   const setupTopMessageObserver = () => {
+    // Only use observer if we have hidden messages
+    if (hiddenMessages.size === 0) {
+      if (topObserver) {
+        topObserver.disconnect();
+        topObserver = null;
+      }
+      return;
+    }
+    
     const pairs = getMessagePairs();
     if (pairs.length === 0) return;
     
@@ -424,7 +428,7 @@ function setupScrollDetection() {
         entries.forEach(entry => {
           // When top element is fully visible and we have hidden messages
           if (entry.isIntersecting && entry.intersectionRatio > 0.5 && hiddenMessages.size > 0) {
-            debug("Top message detected via IntersectionObserver! Auto-expanding +5...");
+            debug("Top message visible via IntersectionObserver! Auto-expanding +5...");
             const currentPairs = getMessagePairs();
             const newKeepN = Math.min(currentPairs.length, state.keepN + 5);
             
@@ -438,22 +442,25 @@ function setupScrollDetection() {
           }
         });
       }, {
-        threshold: [0, 0.5, 1],
+        threshold: [0.5], // Only one threshold for efficiency
         rootMargin: '100px'
       });
       
       topObserver.observe(topElement);
-      debug(`Observing top element for intersection`);
     }
   };
   
-  // Set up the observer
-  setTimeout(() => setupTopMessageObserver(), 1000);
+  // Only set up observer if scroll detection might not work
+  setTimeout(() => {
+    if (hiddenMessages.size > 0) {
+      setupTopMessageObserver();
+    }
+  }, 2000);
   
   // Make it accessible for re-setup after pruning
   window.chatgptSpeedupSetupTopObserver = setupTopMessageObserver;
   
-  debug("Scroll detection enabled for auto-expand (+5 like pill click)");
+  debug("Scroll detection enabled (optimized for performance)");
 }
 
 // Detect when user sends a new message to reset to original keepN
@@ -461,29 +468,87 @@ function setupNewMessageDetection() {
   if (observer) observer.disconnect();
   
   let lastPairCount = getMessagePairs().length;
+  let pruningTimeout = null;
+  let observerPaused = false;
   
   observer = new MutationObserver(() => {
-    // Check if new pairs were added
-    const currentPairs = getMessagePairs();
-    const currentPairCount = currentPairs.length;
+    // Skip if we're paused (during active generation)
+    if (observerPaused) return;
     
-    if (currentPairCount > lastPairCount && isAutoExpanded) {
-      debug("New message pair detected, resetting to original keepN:", originalKeepN);
-      isAutoExpanded = false;
-      lastPairCount = currentPairCount;
-      updateKeepN(originalKeepN, true);
-    } else if (currentPairCount !== lastPairCount) {
-      lastPairCount = currentPairCount;
-    }
+    // Throttle pruning checks - only check every 2 seconds max
+    if (pruningTimeout) return;
     
-    // Also apply pruning when DOM changes
-    setTimeout(applyPruning, 500);
+    pruningTimeout = setTimeout(() => {
+      const currentPairs = getMessagePairs();
+      const currentPairCount = currentPairs.length;
+      
+      if (currentPairCount > lastPairCount && isAutoExpanded) {
+        debug("New message pair detected, resetting to original keepN:", originalKeepN);
+        isAutoExpanded = false;
+        lastPairCount = currentPairCount;
+        updateKeepN(originalKeepN, true);
+      } else if (currentPairCount !== lastPairCount) {
+        lastPairCount = currentPairCount;
+        applyPruning();
+      }
+      
+      pruningTimeout = null;
+    }, 2000); // Only check every 2 seconds instead of 500ms
   });
   
-  observer.observe(document.body, {
+  // Only observe main chat container, not entire body
+  const mainContainer = document.querySelector('main') || document.body;
+  observer.observe(mainContainer, {
     childList: true,
     subtree: true
   });
+  
+  // Pause observer during ChatGPT response generation
+  window.chatgptSpeedupPauseObserver = () => {
+    observerPaused = true;
+    debug("Observer paused during response generation");
+  };
+  
+  window.chatgptSpeedupResumeObserver = () => {
+    observerPaused = false;
+    debug("Observer resumed");
+    // Check for changes when resuming
+    const currentPairs = getMessagePairs();
+    if (currentPairs.length !== lastPairCount) {
+      lastPairCount = currentPairs.length;
+      applyPruning();
+    }
+  };
+}
+
+// Detect when ChatGPT is generating a response
+function setupGenerationDetection() {
+  let isGenerating = false;
+  let generationCheckInterval = null;
+  
+  const checkIfGenerating = () => {
+    // Look for stop button or generating indicator
+    const stopButton = document.querySelector('button[data-testid="stop-button"], button[aria-label="Stop generating"]');
+    const wasGenerating = isGenerating;
+    isGenerating = !!stopButton;
+    
+    if (isGenerating && !wasGenerating) {
+      debug("ChatGPT started generating - pausing observer");
+      if (typeof window.chatgptSpeedupPauseObserver === 'function') {
+        window.chatgptSpeedupPauseObserver();
+      }
+    } else if (!isGenerating && wasGenerating) {
+      debug("ChatGPT finished generating - resuming observer");
+      if (typeof window.chatgptSpeedupResumeObserver === 'function') {
+        window.chatgptSpeedupResumeObserver();
+      }
+    }
+  };
+  
+  // Check every 500ms for generation state
+  generationCheckInterval = setInterval(checkIfGenerating, 500);
+  
+  debug("Generation detection enabled");
 }
 
 async function init() {
@@ -507,6 +572,7 @@ async function init() {
       // Set up observers and scroll detection
       setupNewMessageDetection();
       setupScrollDetection();
+      setupGenerationDetection();
     } else {
       debug(`Attempt ${attempts}: No messages yet`);
       updatePill(); // Update pill to show "No messages"
@@ -676,30 +742,65 @@ function searchInMessages(query, action = 'search') {
     searchState.currentIndex = (searchState.currentIndex - 1 + searchState.matches.length) % searchState.matches.length;
   }
   
-  // Update highlighting and scroll to current match
+  // Update highlighting
   searchState.matches.forEach((mark, idx) => {
     if (idx === searchState.currentIndex) {
       mark.className = searchState.highlightClass + '-current';
-      mark.style.cssText = 'background-color: orange; color: black; padding: 2px 0; font-weight: bold;';
+      mark.style.cssText = 'background-color: orange; color: black; padding: 2px 4px; font-weight: bold; border-radius: 2px;';
     } else {
       mark.className = searchState.highlightClass;
       mark.style.cssText = 'background-color: yellow; color: black; padding: 2px 0;';
     }
   });
   
-  // Scroll to current match (outside the loop to ensure it happens after all updates)
+  // Scroll to current match - use multiple methods for reliability
   if (searchState.currentIndex >= 0 && searchState.matches[searchState.currentIndex]) {
     const currentMark = searchState.matches[searchState.currentIndex];
-    debug(`Scrolling to match ${searchState.currentIndex + 1} of ${searchState.matches.length}`);
+    const currentMatchNum = searchState.currentIndex + 1;
+    const totalMatches = searchState.matches.length;
     
-    // Use setTimeout to ensure DOM has updated before scrolling
-    setTimeout(() => {
+    debug(`Navigating to match ${currentMatchNum} of ${totalMatches}`);
+    
+    // Method 1: Ensure parent message is visible
+    const messageContainer = currentMark.closest('[data-testid^="conversation-turn-"], div.group.w-full');
+    if (messageContainer && hiddenMessages.has(messageContainer)) {
+      debug("Parent message is hidden, making it visible");
+      messageContainer.style.display = '';
+      messageContainer.style.opacity = '';
+      messageContainer.style.maxHeight = '';
+      hiddenMessages.delete(messageContainer);
+    }
+    
+    // Method 2: Use multiple scroll attempts with increasing delays
+    const scrollToMatch = () => {
+      debug(`Scrolling to match at position ${currentMatchNum}/${totalMatches}`);
+      
+      // First scroll attempt - instant
       currentMark.scrollIntoView({ 
-        behavior: 'smooth', 
+        behavior: 'auto',  // Use 'auto' for instant scroll
         block: 'center',
         inline: 'nearest'
       });
-    }, 100);
+      
+      // Second scroll attempt - smooth after a delay
+      setTimeout(() => {
+        currentMark.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'center',
+          inline: 'nearest'
+        });
+        
+        // Flash the highlight to make it more visible
+        currentMark.style.cssText = 'background-color: #ff6600; color: white; padding: 4px 6px; font-weight: bold; border-radius: 3px; box-shadow: 0 0 10px rgba(255,102,0,0.5);';
+        
+        setTimeout(() => {
+          currentMark.style.cssText = 'background-color: orange; color: black; padding: 2px 4px; font-weight: bold; border-radius: 2px;';
+        }, 300);
+      }, 50);
+    };
+    
+    // Execute scroll
+    scrollToMatch();
   }
   
   return { 
