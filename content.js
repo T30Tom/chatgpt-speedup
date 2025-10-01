@@ -129,35 +129,21 @@ function ensurePill() {
     return null;
   }
 
-  if (pillEl && document.body.contains(pillEl)) return pillEl;
+  if (pillEl && document.body.contains(pillEl)) {
+    applyPillTheme();
+    return pillEl;
+  }
   
   pillEl = document.createElement("div");
   pillEl.id = "chat-pruner-pill";
-  pillEl.style.cssText = `
-    position: fixed !important;
-    right: 20px;
-    bottom: 20px;
-    min-width: 140px;
-    height: 36px;
-    padding: 0 14px;
-    background: rgba(10, 10, 10, 0.9);
-    color: #fff;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    border-radius: 18px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    z-index: 2147483647;
-    cursor: pointer;
-    user-select: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font: 600 13px/1 system-ui, sans-serif;
-    transition: all 0.2s;
-  `;
-  pillEl.innerHTML = '<span style="color: #fff;">Loading...</span>';
+  applyPillTheme();
+  pillEl.innerHTML = '<span class="pill-text">Loading...</span>';
   pillEl.title = "Click: +5 • Shift: -5 • Alt+drag: move";
 
   // Hover effect
+  let isDragging = false;
+  let startX, startY, startLeft, startTop;
+  
   pillEl.addEventListener('mouseenter', () => {
     if (!isDragging) pillEl.style.transform = 'scale(1.05)';
   });
@@ -174,9 +160,6 @@ function ensurePill() {
       pillEl.style.bottom = 'auto';
     }
   });
-
-  let isDragging = false;
-  let startX, startY, startLeft, startTop;
 
   // Click handler
   pillEl.addEventListener("click", (e) => {
@@ -234,6 +217,48 @@ function ensurePill() {
   return pillEl;
 }
 
+function applyPillTheme() {
+  if (!pillEl) return;
+  
+  // Detect current theme
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+                 (state.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches) ||
+                 state.theme === 'dark';
+  
+  const bgColor = isDark ? 'rgba(10, 10, 10, 0.92)' : 'rgba(255, 255, 255, 0.92)';
+  const textColor = isDark ? '#ffffff' : '#353740';
+  const borderColor = isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.1)';
+  const shadowColor = isDark ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.15)';
+  
+  pillEl.style.cssText = `
+    position: fixed !important;
+    right: 20px;
+    bottom: 20px;
+    min-width: 140px;
+    height: 36px;
+    padding: 0 14px;
+    background: ${bgColor};
+    color: ${textColor};
+    border: 2px solid ${borderColor};
+    border-radius: 18px;
+    box-shadow: 0 4px 12px ${shadowColor};
+    z-index: 2147483647;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    transition: all 0.2s;
+  `;
+  
+  // Update text color
+  const textEl = pillEl.querySelector('.pill-text');
+  if (textEl) {
+    textEl.style.color = textColor;
+  }
+}
+
 function updatePill() {
   const pill = ensurePill();
   if (!pill) return;
@@ -245,7 +270,7 @@ function updatePill() {
   }).length;
   const total = pairs.length;
   
-  const textEl = pill.querySelector('span');
+  const textEl = pill.querySelector('.pill-text');
   if (textEl) {
     if (total === 0) {
       textEl.textContent = 'No messages found';
@@ -254,14 +279,18 @@ function updatePill() {
     }
   }
   
-  // Update border color based on pruning level
+  // Update border color based on pruning level (keep the color indicators)
   const hiddenPercent = total > 0 ? ((total - visiblePairs) / total) * 100 : 0;
   if (hiddenPercent > 50) {
     pill.style.borderColor = 'rgba(255, 100, 100, 0.6)';
   } else if (hiddenPercent > 25) {
     pill.style.borderColor = 'rgba(255, 200, 0, 0.6)';
   } else {
-    pill.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+    // Use theme-based border
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+                   (state.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches) ||
+                   state.theme === 'dark';
+    pill.style.borderColor = isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.1)';
   }
 }
 
@@ -633,16 +662,20 @@ function clearSearchHighlights() {
   searchState.currentIndex = -1;
 }
 
-function highlightText(element, query) {
+function highlightText(element, pattern) {
   const text = element.textContent || '';
-  const lowerText = text.toLowerCase();
-  const lowerQuery = query.toLowerCase();
-  
-  let index = 0;
   const fragments = [];
   let lastIndex = 0;
+  let match;
   
-  while ((index = lowerText.indexOf(lowerQuery, lastIndex)) !== -1) {
+  // Reset regex lastIndex for global patterns
+  pattern.lastIndex = 0;
+  
+  // Find all instances using the pattern
+  while ((match = pattern.exec(text)) !== null) {
+    const index = match.index;
+    const matchText = match[0];
+    
     // Add text before match
     if (index > lastIndex) {
       fragments.push(document.createTextNode(text.substring(lastIndex, index)));
@@ -651,12 +684,17 @@ function highlightText(element, query) {
     // Add highlighted match
     const mark = document.createElement('mark');
     mark.className = searchState.highlightClass;
-    mark.textContent = text.substring(index, index + query.length);
+    mark.textContent = matchText;
     mark.style.cssText = 'background-color: yellow; color: black; padding: 2px 0;';
     fragments.push(mark);
     searchState.matches.push(mark);
     
-    lastIndex = index + query.length;
+    lastIndex = index + matchText.length;
+    
+    // Prevent infinite loop for zero-width matches
+    if (matchText.length === 0) {
+      pattern.lastIndex++;
+    }
   }
   
   // Add remaining text
@@ -667,7 +705,7 @@ function highlightText(element, query) {
   return fragments;
 }
 
-function highlightInElement(element, query) {
+function highlightInElement(element, query, pattern) {
   const walker = document.createTreeWalker(
     element,
     NodeFilter.SHOW_TEXT,
@@ -679,9 +717,10 @@ function highlightInElement(element, query) {
             node.parentElement?.tagName === 'STYLE') {
           return NodeFilter.FILTER_REJECT;
         }
-        // Only accept if contains our search query
+        // Only accept if contains match using pattern
         const text = node.textContent || '';
-        return text.toLowerCase().includes(query.toLowerCase()) 
+        pattern.lastIndex = 0; // Reset for test
+        return pattern.test(text)
           ? NodeFilter.FILTER_ACCEPT 
           : NodeFilter.FILTER_REJECT;
       }
@@ -696,7 +735,7 @@ function highlightInElement(element, query) {
   
   // Process text nodes
   textNodes.forEach(textNode => {
-    const fragments = highlightText(textNode, query);
+    const fragments = highlightText(textNode, pattern);
     if (fragments.length > 0) {
       const parent = textNode.parentNode;
       fragments.forEach(fragment => {
@@ -707,32 +746,54 @@ function highlightInElement(element, query) {
   });
 }
 
-function searchInMessages(query, action = 'search') {
+function searchInMessages(query, action = 'search', options = {}) {
   if (!query || query.length < 2) {
     clearSearchHighlights();
     return { matches: 0, currentIndex: -1, total: 0 };
   }
   
+  const useRegex = options.useRegex || false;
+  const filter = options.filter || '';
+  const searchKey = `${query}|${useRegex}|${filter}`;
+  
   // If it's a new search, clear previous highlights
-  if (query !== searchState.currentQuery) {
+  if (searchKey !== searchState.currentQuery) {
     clearSearchHighlights();
-    searchState.currentQuery = query;
+    searchState.currentQuery = searchKey;
     
     const allTurns = getAllMessages();
-    debug(`Searching for "${query}" in ${allTurns.length} individual turns`);
+    debug(`Searching for "${query}" in ${allTurns.length} individual turns (regex: ${useRegex}, filter: ${filter})`);
     
     // Find all pairs that contain matches and ensure they're visible
     const pairs = getMessagePairs();
     let pairsWithMatches = [];
     
+    // Create search pattern
+    let searchPattern;
+    try {
+      if (useRegex) {
+        searchPattern = new RegExp(query, 'gi');
+      } else {
+        searchPattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      }
+    } catch (e) {
+      debug("Invalid regex pattern:", e);
+      return { matches: 0, currentIndex: -1, total: 0, error: "Invalid regex pattern" };
+    }
+    
     pairs.forEach(pair => {
       let pairHasMatch = false;
       pair.elements.forEach(el => {
+        // Apply filter
+        const role = el.getAttribute('data-message-author-role');
+        if (filter === 'from:me' && role !== 'user') return;
+        if (filter === 'from:assistant' && role !== 'assistant') return;
+        
         const text = el.textContent || '';
-        if (text.toLowerCase().includes(query.toLowerCase())) {
+        if (searchPattern.test(text)) {
           pairHasMatch = true;
           // Highlight the text
-          highlightInElement(el, query);
+          highlightInElement(el, useRegex ? query : null, searchPattern);
           
           // Show if hidden
           if (hiddenMessages.has(el)) {
@@ -865,7 +926,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
       
     case "searchArchive": {
-      const result = searchInMessages(msg.query, msg.action || 'search');
+      const result = searchInMessages(msg.query, msg.action || 'search', {
+        useRegex: msg.useRegex,
+        filter: msg.filter
+      });
       sendResponse(result);
       return true;
     }

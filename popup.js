@@ -108,50 +108,102 @@ async function updateStats() {
   if (!tab?.id) return;
 
   const stats = await sendMessage(tab.id, { type: "getStats" });
-  const statsEl = document.getElementById("conversation-stats");
   
-  if (!statsEl) return;
+  // Update individual stat elements
+  const statVisible = document.getElementById('stat-visible');
+  const statTotal = document.getElementById('stat-total');
+  const statArchived = document.getElementById('stat-archived');
+  const statPercent = document.getElementById('stat-percent');
+  const statMemory = document.getElementById('stat-memory');
   
   if (stats.error) {
-    if (stats.error.includes('not ready')) {
-      statsEl.innerHTML = `
-        <div style="color: #999;">
-          Content script not loaded.<br>
-          <button id="refreshPageBtn" style="margin-top:4px;padding:4px 8px;font-size:11px;">Refresh Page</button>
-        </div>
-      `;
-      const refreshBtn = document.getElementById('refreshPageBtn');
-      if (refreshBtn) {
-        refreshBtn.onclick = async () => {
-          await chrome.tabs.reload(tab.id);
-          window.close();
-        };
-      }
-    } else {
-      statsEl.innerHTML = `<div style="color: #999;">Stats unavailable</div>`;
-    }
+    if (statVisible) statVisible.textContent = 'N/A';
+    if (statTotal) statTotal.textContent = 'N/A';
+    if (statArchived) statArchived.textContent = 'N/A';
+    if (statPercent) statPercent.textContent = 'N/A';
+    if (statMemory) statMemory.textContent = 'N/A';
     return;
   }
 
-  statsEl.innerHTML = `
-    This conversation:<br>
-    <strong>${stats.visible || 0}</strong> messages visible / <strong>${stats.total || 0}</strong> total<br>
-    <strong>${stats.archived || 0}</strong> in archive
-  `;
+  const visible = stats.visible || 0;
+  const total = stats.total || 0;
+  const archived = stats.archived || 0;
+  const archivedPercent = total > 0 ? Math.round((archived / total) * 100) : 0;
+  const memorySaved = total > 0 ? Math.round((archived / total) * 100) : 0;
+  
+  if (statVisible) statVisible.textContent = visible.toString();
+  if (statTotal) statTotal.textContent = total.toString();
+  if (statArchived) statArchived.textContent = `${archived} (${archivedPercent}%)`;
+  if (statPercent) statPercent.textContent = `${archivedPercent}%`;
+  if (statMemory) statMemory.textContent = `~${memorySaved}%`;
 }
 
 function showMessage(message, isError = true) {
   const msgDiv = document.createElement('div');
-  msgDiv.style.cssText = isError 
-    ? 'background:#fee;color:#c00;padding:8px;margin:8px 0;border-radius:4px;font-size:12px'
-    : 'background:#efe;color:#080;padding:8px;margin:8px 0;border-radius:4px;font-size:12px';
+  msgDiv.className = `message-notification ${isError ? 'error' : 'success'}`;
   msgDiv.textContent = message;
-  document.body.insertBefore(msgDiv, document.body.firstChild);
+  document.body.appendChild(msgDiv);
   
   setTimeout(() => msgDiv.remove(), 3000);
 }
 
+// Collapsible sections
+function setupCollapsibleSections() {
+  const sectionHeaders = document.querySelectorAll('.section-header');
+  
+  sectionHeaders.forEach(header => {
+    // Click handler for entire header
+    header.addEventListener('click', (e) => {
+      // Prevent event bubbling to parent elements
+      e.stopPropagation();
+      
+      const sectionName = header.getAttribute('data-section');
+      const content = document.getElementById(`${sectionName}-content`);
+      
+      if (content) {
+        const isCurrentlyCollapsed = content.classList.contains('collapsed');
+        
+        // Toggle collapsed state
+        if (isCurrentlyCollapsed) {
+          content.classList.remove('collapsed');
+          header.classList.remove('collapsed');
+        } else {
+          content.classList.add('collapsed');
+          header.classList.add('collapsed');
+        }
+        
+        // Save collapse state (true = expanded, false = collapsed)
+        const collapseState = JSON.parse(localStorage.getItem('sectionCollapseState') || '{}');
+        collapseState[sectionName] = !isCurrentlyCollapsed; // Save expanded state
+        localStorage.setItem('sectionCollapseState', JSON.stringify(collapseState));
+      }
+    });
+  });
+  
+  // Restore collapse state on load (default to all expanded)
+  const collapseState = JSON.parse(localStorage.getItem('sectionCollapseState') || '{}');
+  
+  // If no saved state, keep everything expanded (default)
+  // Only collapse if explicitly saved as collapsed (false)
+  sectionHeaders.forEach(header => {
+    const sectionName = header.getAttribute('data-section');
+    const content = document.getElementById(`${sectionName}-content`);
+    
+    // If saved state is false (collapsed), apply collapsed state
+    if (collapseState[sectionName] === false) {
+      if (content) {
+        content.classList.add('collapsed');
+        header.classList.add('collapsed');
+      }
+    }
+    // Otherwise keep expanded (default state from HTML)
+  });
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  // Setup collapsible sections
+  setupCollapsibleSections();
+  
   // Check if we're on a valid page
   const tab = await getCurrentTab();
   if (!tab) {
@@ -173,12 +225,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Get all elements
   const elements = {
+    presetProfile: document.getElementById("presetProfile"),
     keepN: document.getElementById("keepN"),
     keepNPreset: document.getElementById("keepNPreset"),
     mode: document.getElementById("mode"),
     storageCap: document.getElementById("storageCap"),
-    apply: document.getElementById("apply"),
-    refreshTabs: document.getElementById("refreshTabs"),
     exportArchive: document.getElementById("exportArchive"),
     exportMenu: document.getElementById("exportMenu"),
     importArchive: document.getElementById("importArchive"),
@@ -193,8 +244,35 @@ document.addEventListener("DOMContentLoaded", async () => {
     searchPrevBtn: document.getElementById("searchPrevBtn"),
     searchArchive: document.getElementById("searchArchive"),
     searchResults: document.getElementById("searchResults"),
+    regexSearch: document.getElementById("regexSearch"),
+    searchFilter: document.getElementById("searchFilter"),
     conversationStats: document.getElementById("conversation-stats")
   };
+
+  // Auto-apply function
+  async function autoApplySettings() {
+    try {
+      const settings = {
+        keepN: Math.max(1, parseInt(elements.keepN?.value, 10) || s.keepN),
+        mode: elements.mode?.value === "hidden" ? "hidden" : "storage",
+        storageCap: Math.max(50, parseInt(elements.storageCap?.value, 10) || s.storageCap),
+        debugLogs: elements.debugLogs?.checked || false,
+        autoCollapse: elements.autoCollapse?.checked || false,
+        pillEnabled: elements.pillEnabled?.checked !== false,
+        theme: elements.themeSelect?.value || 'auto',
+        selectors: DEFAULTS.selectors
+      };
+      
+      await setSettings(settings);
+      
+      if (tab?.id) {
+        await sendMessage(tab.id, { type: "applySettings" });
+        updateStats();
+      }
+    } catch (error) {
+      console.error('Auto-apply error:', error);
+    }
+  }
 
   // Set values from settings
   if (elements.keepN) elements.keepN.value = s.keepN;
@@ -205,17 +283,39 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (elements.pillEnabled) elements.pillEnabled.checked = s.pillEnabled !== false;
   if (elements.themeSelect) elements.themeSelect.value = s.theme || 'auto';
 
-  // keepN preset dropdown handler
+  // Profile presets
+  const PRESETS = {
+    performance: { keepN: 5, mode: 'hidden' },
+    research: { keepN: 50, mode: 'storage' },
+    full: { keepN: 999999, mode: 'storage' }
+  };
+
+  if (elements.presetProfile) {
+    elements.presetProfile.addEventListener('change', () => {
+      const preset = elements.presetProfile.value;
+      if (preset && PRESETS[preset]) {
+        const config = PRESETS[preset];
+        elements.keepN.value = config.keepN;
+        elements.mode.value = config.mode;
+        elements.keepNPreset.value = '';
+        autoApplySettings();
+      }
+    });
+  }
+
+  // keepN preset dropdown handler with auto-apply
   if (elements.keepNPreset) {
     elements.keepNPreset.addEventListener('change', () => {
       const value = elements.keepNPreset.value;
       if (value) {
         elements.keepN.value = value;
+        elements.presetProfile.value = ''; // Clear profile preset
+        autoApplySettings();
       }
     });
     
-    // Update preset dropdown when keepN changes manually
-    elements.keepN.addEventListener('input', () => {
+    // Update preset dropdown when keepN changes manually and auto-apply
+    elements.keepN.addEventListener('change', () => {
       const currentValue = elements.keepN.value;
       const presetOptions = ['10', '50', '100', '999999'];
       if (presetOptions.includes(currentValue)) {
@@ -223,15 +323,37 @@ document.addEventListener("DOMContentLoaded", async () => {
       } else {
         elements.keepNPreset.value = '';
       }
+      elements.presetProfile.value = ''; // Clear profile preset
+      autoApplySettings();
     });
   }
 
-  // Theme change handler
+  // Auto-apply on all setting changes (clear profile preset on manual changes)
+  if (elements.mode) {
+    elements.mode.addEventListener('change', () => {
+      elements.presetProfile.value = ''; // Clear profile preset
+      autoApplySettings();
+    });
+  }
+  if (elements.storageCap) {
+    elements.storageCap.addEventListener('change', autoApplySettings);
+  }
+  if (elements.debugLogs) {
+    elements.debugLogs.addEventListener('change', autoApplySettings);
+  }
+  if (elements.autoCollapse) {
+    elements.autoCollapse.addEventListener('change', autoApplySettings);
+  }
+  if (elements.pillEnabled) {
+    elements.pillEnabled.addEventListener('change', autoApplySettings);
+  }
+
+  // Theme change handler with auto-apply
   if (elements.themeSelect) {
     elements.themeSelect.addEventListener('change', async () => {
       const theme = elements.themeSelect.value;
       applyTheme(theme);
-      await setSettings({ ...s, theme });
+      await autoApplySettings();
     });
   }
 
@@ -245,52 +367,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Update stats
   updateStats();
   const statsInterval = setInterval(updateStats, 2000);
-
-  // Apply button
-  if (elements.apply) {
-    elements.apply.addEventListener("click", async () => {
-      try {
-        const settings = {
-          keepN: Math.max(1, parseInt(elements.keepN?.value, 10) || DEFAULTS.keepN),
-          mode: elements.mode?.value === "hidden" ? "hidden" : "storage",
-          storageCap: Math.max(50, parseInt(elements.storageCap?.value, 10) || DEFAULTS.storageCap),
-          debugLogs: elements.debugLogs?.checked || false,
-          autoCollapse: elements.autoCollapse?.checked || false,
-          pillEnabled: elements.pillEnabled?.checked !== false,
-          theme: elements.themeSelect?.value || 'auto',
-          selectors: DEFAULTS.selectors
-        };
-        
-        await setSettings(settings);
-        
-        if (tab?.id) {
-          const response = await sendMessage(tab.id, { type: "applySettings" });
-          if (response?.error) {
-            if (response.error.includes('not ready')) {
-              showMessage('Content script not loaded. Please refresh the page.');
-            } else {
-              showMessage('Error: ' + response.error);
-            }
-          } else {
-            showMessage('Settings applied!', false);
-            updateStats();
-          }
-        }
-      } catch (error) {
-        console.error('Error:', error);
-        showMessage('Error: ' + error.message);
-      }
-    });
-  }
-
-  // Refresh tabs button
-  if (elements.refreshTabs) {
-    elements.refreshTabs.addEventListener("click", () => {
-      chrome.runtime.sendMessage({ type: "refreshAllChatTabs" }, () => {
-        showMessage('Refresh request sent', false);
-      });
-    });
-  }
 
   // Export button with dropdown menu
   if (elements.exportArchive && elements.exportMenu) {
@@ -463,10 +539,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
+      const useRegex = elements.regexSearch?.checked || false;
+      const filter = elements.searchFilter?.value || '';
+
       elements.searchBtn.textContent = "⌛";
       const result = await sendMessage(tab.id, { 
         type: "searchArchive", 
-        query 
+        query,
+        useRegex,
+        filter
       });
       elements.searchBtn.textContent = "🔍";
 
