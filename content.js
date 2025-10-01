@@ -15,6 +15,9 @@ let state = { ...DEFAULTS };
 let pillEl = null;
 let hiddenMessages = new Set();
 let observer = null;
+let originalKeepN = DEFAULTS.keepN; // Store original user setting
+let isAutoExpanded = false; // Track if we've auto-expanded
+let lastScrollPosition = 0;
 
 function debug(...args) {
   if (state.debugLogs) console.log("[ChatGPT Speedup]", ...args);
@@ -27,6 +30,7 @@ function settingsKey() {
 async function loadSettings() {
   const { [settingsKey()]: s } = await chrome.storage.sync.get(settingsKey());
   if (s) Object.assign(state, s);
+  originalKeepN = state.keepN; // Store the user's original setting
   debug("Settings loaded:", state);
 }
 
@@ -140,9 +144,9 @@ function ensurePill() {
     
     const current = state.keepN;
     if (e.shiftKey) {
-      updateKeepN(Math.max(1, current - 5));
+      updateKeepN(Math.max(1, current - 5), true); // Manual change
     } else {
-      updateKeepN(current + 5);
+      updateKeepN(current + 5, true); // Manual change
     }
   });
 
@@ -217,10 +221,17 @@ function updatePill() {
   }
 }
 
-function updateKeepN(n) {
+function updateKeepN(n, isManualChange = false) {
   state.keepN = Math.max(1, n);
-  saveSettings({ keepN: state.keepN });
-  debug(`Setting keepN to ${state.keepN}`);
+  
+  // Only save and update original if it's a manual change (not auto-expand)
+  if (isManualChange || !isAutoExpanded) {
+    saveSettings({ keepN: state.keepN });
+    originalKeepN = state.keepN;
+    isAutoExpanded = false;
+  }
+  
+  debug(`Setting keepN to ${state.keepN}${isAutoExpanded ? ' (auto-expanded)' : ''}`);
   applyPruning();
 }
 
@@ -259,6 +270,84 @@ function applyPruning() {
   updatePill();
 }
 
+// Auto-expand when scrolling to top
+function setupScrollDetection() {
+  let scrollTimeout;
+  
+  window.addEventListener('scroll', () => {
+    clearTimeout(scrollTimeout);
+    
+    scrollTimeout = setTimeout(() => {
+      const currentScroll = window.scrollY || window.pageYOffset || document.documentElement.scrollTop;
+      const scrollingUp = currentScroll < lastScrollPosition;
+      lastScrollPosition = currentScroll;
+      
+      // Check if we're near the top (within 200px)
+      if (scrollingUp && currentScroll < 200) {
+        const messages = getAllMessages();
+        const visibleCount = messages.filter(m => !hiddenMessages.has(m)).length;
+        
+        // If we have hidden messages and user is scrolling to top
+        if (hiddenMessages.size > 0) {
+          debug("User scrolled to top, auto-expanding messages...");
+          const newKeepN = Math.min(messages.length, state.keepN + 10);
+          
+          if (newKeepN > state.keepN) {
+            isAutoExpanded = true;
+            updateKeepN(newKeepN);
+          }
+        }
+      }
+    }, 150); // Debounce scroll events
+  }, { passive: true });
+  
+  debug("Scroll detection enabled for auto-expand");
+}
+
+// Detect when user sends a new message to reset to original keepN
+function setupNewMessageDetection() {
+  if (observer) observer.disconnect();
+  
+  observer = new MutationObserver((mutations) => {
+    // Check if new messages were added
+    const messages = getAllMessages();
+    const hadAutoExpanded = isAutoExpanded;
+    
+    // Look for the textarea/input to detect when user is typing
+    const inputArea = document.querySelector('textarea[data-id], textarea#prompt-textarea, div[contenteditable="true"]');
+    
+    if (inputArea && hadAutoExpanded) {
+      // Set up a one-time listener for when they submit
+      const checkForNewMessage = () => {
+        setTimeout(() => {
+          const newMessages = getAllMessages();
+          // If message count increased, user sent a message
+          if (newMessages.length > messages.length) {
+            debug("New message detected, resetting to original keepN:", originalKeepN);
+            isAutoExpanded = false;
+            updateKeepN(originalKeepN);
+          }
+        }, 1000);
+      };
+      
+      // Listen for Enter key or button click
+      inputArea.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          checkForNewMessage();
+        }
+      }, { once: true });
+    }
+    
+    // Also apply pruning when DOM changes
+    setTimeout(applyPruning, 500);
+  });
+  
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+}
+
 async function init() {
   debug("Initializing ChatGPT Speedup...");
   await loadSettings();
@@ -277,15 +366,9 @@ async function init() {
       debug(`Ready! Found ${messages.length} messages`);
       applyPruning();
       
-      // Set up observer
-      if (observer) observer.disconnect();
-      observer = new MutationObserver(() => {
-        setTimeout(applyPruning, 500);
-      });
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
+      // Set up observers and scroll detection
+      setupNewMessageDetection();
+      setupScrollDetection();
     } else {
       debug(`Attempt ${attempts}: No messages yet`);
       updatePill(); // Update pill to show "No messages"
@@ -296,6 +379,60 @@ async function init() {
       }
     }
   }, 500);
+}
+
+// Search functionality
+function searchInMessages(query) {
+  if (!query || query.length < 2) {
+    return { matches: 0, message: "Query too short" };
+  }
+  
+  const messages = getAllMessages();
+  const searchLower = query.toLowerCase();
+  let matchCount = 0;
+  
+  debug(`Searching for "${query}" in ${messages.length} messages`);
+  
+  messages.forEach(msg => {
+    const text = msg.textContent || msg.innerText || "";
+    const textLower = text.toLowerCase();
+    
+    if (textLower.includes(searchLower)) {
+      matchCount++;
+      // Temporarily show the message if it was hidden
+      if (hiddenMessages.has(msg)) {
+        msg.style.display = '';
+        msg.style.opacity = '';
+        msg.style.maxHeight = '';
+        msg.style.backgroundColor = 'rgba(255, 255, 0, 0.1)'; // Highlight
+        
+        // Scroll to first match
+        if (matchCount === 1) {
+          setTimeout(() => {
+            msg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 100);
+        }
+      }
+    }
+  });
+  
+  debug(`Found ${matchCount} matches for "${query}"`);
+  
+  if (matchCount > 0) {
+    // Update the keepN to show all matches
+    const visibleNeeded = messages.length - Array.from(hiddenMessages).filter(msg => {
+      const text = msg.textContent || msg.innerText || "";
+      return !text.toLowerCase().includes(searchLower);
+    }).length;
+    
+    if (visibleNeeded > state.keepN) {
+      updateKeepN(visibleNeeded);
+    } else {
+      updatePill();
+    }
+  }
+  
+  return { matches: matchCount };
 }
 
 // Message listener
@@ -322,6 +459,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         archived: hiddenMessages.size,
         total: messages.length
       });
+      return true;
+      
+    case "searchArchive":
+      const result = searchInMessages(msg.query);
+      sendResponse(result);
       return true;
       
     case "refreshPrompt":
