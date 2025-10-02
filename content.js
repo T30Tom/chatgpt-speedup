@@ -799,13 +799,22 @@ function searchInMessages(query, action = 'search', options = {}) {
       return { matches: 0, currentIndex: -1, total: 0, error: "Invalid regex pattern" };
     }
     
-    pairs.forEach(pair => {
+    pairs.forEach((pair, pairIndex) => {
       let pairHasMatch = false;
-      pair.elements.forEach(el => {
+      pair.elements.forEach((el, elIndex) => {
+        // Apply filter - determine role based on position in pair
+        // In pairs, first element (elIndex 0) is user, second (elIndex 1) is assistant
+        const isUserMessage = elIndex === 0;
+        const isAssistantMessage = elIndex === 1;
+        
+        // Also check data attribute as fallback
+        const roleAttr = el.getAttribute('data-message-author-role');
+        const isUser = isUserMessage || roleAttr === 'user';
+        const isAssistant = isAssistantMessage || roleAttr === 'assistant';
+        
         // Apply filter
-        const role = el.getAttribute('data-message-author-role');
-        if (filter === 'from:me' && role !== 'user') return;
-        if (filter === 'from:assistant' && role !== 'assistant') return;
+        if (filter === 'from:me' && !isUser) return;
+        if (filter === 'from:assistant' && !isAssistant) return;
         
         const text = el.textContent || '';
         if (searchPattern.test(text)) {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Speedup",
-  "version": "1.4.0",
+  "version": "1.4.2",
   "description": "Improve ChatGPT performance by pruning old messages while keeping full history accessible.",
   "permissions": ["storage", "tabs"],
   "host_permissions": [
