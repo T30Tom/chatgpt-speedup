@@ -79,6 +79,33 @@ function getAllMessages() {
         
         if (messages.length > 0) {
           debug(`Found ${messages.length} individual turns using selector: ${selector}`);
+          
+          // Try to detect role for each message
+          messages.forEach((msg, idx) => {
+            // Check various methods to identify role
+            const dataRole = msg.getAttribute('data-message-author-role');
+            const testId = msg.getAttribute('data-testid');
+            
+            // Detect based on testid patterns
+            let detectedRole = null;
+            if (testId) {
+              if (testId.includes('user')) detectedRole = 'user';
+              else if (testId.includes('assistant')) detectedRole = 'assistant';
+            }
+            
+            // Fallback: assume alternating pattern starting with user
+            if (!detectedRole && !dataRole) {
+              detectedRole = idx % 2 === 0 ? 'user' : 'assistant';
+            }
+            
+            // Store as data attribute if not present
+            if (!dataRole && detectedRole) {
+              msg.setAttribute('data-message-author-role', detectedRole);
+            }
+            
+            debug(`Message ${idx}: role = ${dataRole || detectedRole}`);
+          });
+          
           break;
         }
       }
@@ -662,7 +689,9 @@ let searchState = {
   currentQuery: '',
   matches: [],
   currentIndex: -1,
-  highlightClass: 'chatgpt-speedup-highlight'
+  highlightClass: 'chatgpt-speedup-highlight',
+  lastSearchQuery: '',
+  lastSearchFilter: ''
 };
 
 function clearSearchHighlights() {
@@ -773,6 +802,10 @@ function searchInMessages(query, action = 'search', options = {}) {
   const useRegex = options.useRegex || false;
   const filter = options.filter || '';
   const searchKey = `${query}|${useRegex}|${filter}`;
+  
+  // Store last search params for navigation
+  searchState.lastSearchQuery = query;
+  searchState.lastSearchFilter = filter;
   
   // If it's a new search, clear previous highlights
   if (searchKey !== searchState.currentQuery) {
@@ -980,13 +1013,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
       
     case "searchNext": {
-      const nextResult = searchInMessages(searchState.currentQuery, 'next');
+      const nextResult = searchInMessages(searchState.lastSearchQuery, 'next', {
+        useRegex: false,
+        filter: searchState.lastSearchFilter
+      });
       sendResponse(nextResult);
       return true;
     }
       
     case "searchPrev": {
-      const prevResult = searchInMessages(searchState.currentQuery, 'prev');
+      const prevResult = searchInMessages(searchState.lastSearchQuery, 'prev', {
+        useRegex: false,
+        filter: searchState.lastSearchFilter
+      });
       sendResponse(prevResult);
       return true;
     }

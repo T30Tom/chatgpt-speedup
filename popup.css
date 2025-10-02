@@ -45,9 +45,8 @@ body {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-primary);
-  background: var(--bg-primary);
+  background: transparent;
   width: 360px;
-  max-height: 600px;
   margin: 0;
   padding: 0;
 }
@@ -75,7 +74,8 @@ body::-webkit-scrollbar-thumb:hover {
   padding: 0;
   border: 1px solid var(--border-light);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: auto;
+  max-height: 600px;
   background: var(--bg-primary);
   box-shadow: var(--shadow-md);
 }
@@ -313,10 +313,33 @@ input[type="number"]::-webkit-outer-spin-button {
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
+  align-items: center;
 }
 
 .search-input {
   flex: 1;
+}
+
+.search-filter-inline {
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  min-width: 130px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.search-filter-inline:hover {
+  border-color: var(--border-medium);
+}
+
+.search-filter-inline:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.1);
 }
 
 .icon-btn {
@@ -334,34 +357,6 @@ input[type="number"]::-webkit-outer-spin-button {
 .icon-btn:hover {
   background: var(--bg-secondary);
   border-color: var(--border-medium);
-}
-
-.search-options {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.search-options .checkbox-label {
-  padding: 0;
-  margin: 0;
-  font-size: 13px;
-}
-
-.search-options .checkbox-label input {
-  width: 16px;
-  height: 16px;
-}
-
-.search-filter {
-  flex: 1;
-  padding: 6px 8px;
-  border: 1px solid var(--border-light);
-  border-radius: 6px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-size: 12px;
 }
 
 .search-nav {

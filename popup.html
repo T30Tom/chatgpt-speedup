@@ -136,18 +136,12 @@
         <div class="section-content" id="search-content">
           <div class="search-container">
             <input type="search" id="searchArchive" placeholder="Search messages..." class="search-input">
-            <button id="searchBtn" class="icon-btn" title="Search">🔎</button>
-          </div>
-          <div class="search-options">
-            <label class="checkbox-label">
-              <input type="checkbox" id="regexSearch">
-              <span>Regex</span>
-            </label>
-            <select id="searchFilter" class="search-filter">
+            <select id="searchFilter" class="search-filter-inline">
               <option value="">All messages</option>
               <option value="from:me">From me</option>
               <option value="from:assistant">From ChatGPT</option>
             </select>
+            <button id="searchBtn" class="icon-btn" title="Search">🔎</button>
           </div>
           <div class="search-nav">
             <button id="searchPrevBtn" class="nav-btn">◀ Prev</button>

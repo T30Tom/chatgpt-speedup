@@ -294,15 +294,31 @@ document.addEventListener("DOMContentLoaded", async () => {
     full: { keepN: 999999, mode: 'storage' }
   };
 
+  // Load saved profile preset
+  if (elements.presetProfile && s.profilePreset) {
+    elements.presetProfile.value = s.profilePreset;
+  }
+
   if (elements.presetProfile) {
-    elements.presetProfile.addEventListener('change', () => {
+    elements.presetProfile.addEventListener('change', async () => {
       const preset = elements.presetProfile.value;
       if (preset && PRESETS[preset]) {
         const config = PRESETS[preset];
         elements.keepN.value = config.keepN;
         elements.mode.value = config.mode;
         elements.keepNPreset.value = '';
+        
+        // Save the profile preset selection
+        const currentSettings = await getSettings();
+        currentSettings.profilePreset = preset;
+        await setSettings(currentSettings);
+        
         autoApplySettings();
+      } else if (preset === '') {
+        // Clear saved preset if set to custom
+        const currentSettings = await getSettings();
+        delete currentSettings.profilePreset;
+        await setSettings(currentSettings);
       }
     });
   }
@@ -319,7 +335,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
     
     // Update preset dropdown when keepN changes manually and auto-apply
-    elements.keepN.addEventListener('change', () => {
+    elements.keepN.addEventListener('change', async () => {
       const currentValue = elements.keepN.value;
       const presetOptions = ['10', '50', '100', '999999'];
       if (presetOptions.includes(currentValue)) {
@@ -328,14 +344,26 @@ document.addEventListener("DOMContentLoaded", async () => {
         elements.keepNPreset.value = '';
       }
       elements.presetProfile.value = ''; // Clear profile preset
+      
+      // Clear saved preset
+      const currentSettings = await getSettings();
+      delete currentSettings.profilePreset;
+      await setSettings(currentSettings);
+      
       autoApplySettings();
     });
   }
 
   // Auto-apply on all setting changes (clear profile preset on manual changes)
   if (elements.mode) {
-    elements.mode.addEventListener('change', () => {
+    elements.mode.addEventListener('change', async () => {
       elements.presetProfile.value = ''; // Clear profile preset
+      
+      // Clear saved preset
+      const currentSettings = await getSettings();
+      delete currentSettings.profilePreset;
+      await setSettings(currentSettings);
+      
       autoApplySettings();
     });
   }
@@ -548,14 +576,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
-      const useRegex = elements.regexSearch?.checked || false;
       const filter = elements.searchFilter?.value || '';
 
       elements.searchBtn.textContent = "⌛";
       const result = await sendMessage(tab.id, { 
         type: "searchArchive", 
         query,
-        useRegex,
+        useRegex: false,
         filter
       });
       elements.searchBtn.textContent = "🔍";
