@@ -129,7 +129,11 @@ async function updateStats() {
   const total = stats.total || 0;
   const archived = stats.archived || 0;
   const archivedPercent = total > 0 ? Math.round((archived / total) * 100) : 0;
-  const memorySaved = total > 0 ? Math.round((archived / total) * 100) : 0;
+  
+  // Improved memory calculation based on actual content size
+  const totalSize = stats.totalSize || 0;
+  const visibleSize = stats.visibleSize || 0;
+  const memorySaved = totalSize > 0 ? Math.round(((totalSize - visibleSize) / totalSize) * 100) : 0;
   
   if (statVisible) statVisible.textContent = visible.toString();
   if (statTotal) statTotal.textContent = total.toString();
@@ -370,6 +374,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Export button with dropdown menu
   if (elements.exportArchive && elements.exportMenu) {
+    // Ensure menu starts hidden
+    elements.exportMenu.style.display = 'none';
+    elements.exportMenu.style.removeProperty('display');
+    elements.exportMenu.style.display = 'none';
+    
     // Toggle dropdown menu
     elements.exportArchive.addEventListener("click", (e) => {
       e.stopPropagation();

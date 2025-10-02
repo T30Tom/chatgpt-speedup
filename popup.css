@@ -203,6 +203,20 @@ select:focus,
   box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.1);
 }
 
+/* Fix number input spinner arrows visibility */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: inner-spin-button;
+  opacity: 1;
+  cursor: pointer;
+}
+
+/* Ensure spinner is visible in both light and dark themes */
+[data-theme="dark"] input[type="number"]::-webkit-inner-spin-button,
+[data-theme="dark"] input[type="number"]::-webkit-outer-spin-button {
+  filter: invert(1) hue-rotate(180deg);
+}
+
 .input-small,
 .select-small {
   width: calc(50% - 4px);

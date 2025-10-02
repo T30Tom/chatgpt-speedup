@@ -18,6 +18,7 @@ let observer = null;
 let originalKeepN = DEFAULTS.keepN; // Store original user setting
 let isAutoExpanded = false; // Track if we've auto-expanded
 let lastScrollPosition = 0;
+let scrollDetectionPaused = false; // Flag to pause scroll detection after manual clicks
 
 function debug(...args) {
   if (state.debugLogs) console.log("[ChatGPT Speedup]", ...args);
@@ -166,6 +167,13 @@ function ensurePill() {
     if (isDragging || e.altKey) return;
     e.preventDefault();
     
+    // Pause scroll detection for 2 seconds after manual click
+    scrollDetectionPaused = true;
+    setTimeout(() => {
+      scrollDetectionPaused = false;
+      debug("Scroll detection re-enabled after manual click");
+    }, 2000);
+    
     const current = state.keepN;
     if (e.shiftKey) {
       updateKeepN(Math.max(1, current - 5), true); // Manual change
@@ -195,6 +203,8 @@ function ensurePill() {
     const newLeft = Math.max(0, Math.min(window.innerWidth - 140, startLeft + (e.clientX - startX)));
     const newTop = Math.max(0, Math.min(window.innerHeight - 36, startTop + (e.clientY - startY)));
     
+    // Remove transition for instant cursor follow
+    pillEl.style.transition = 'none';
     pillEl.style.left = `${newLeft}px`;
     pillEl.style.top = `${newTop}px`;
     pillEl.style.right = 'auto';
@@ -206,6 +216,11 @@ function ensurePill() {
     isDragging = false;
     pillEl.style.cursor = 'pointer';
     pillEl.style.transform = 'scale(1)';
+    
+    // Restore transition after drag
+    setTimeout(() => {
+      pillEl.style.transition = 'all 0.2s';
+    }, 50);
     
     const rect = pillEl.getBoundingClientRect();
     chrome.storage.sync.set({
@@ -392,6 +407,9 @@ function setupScrollDetection() {
   }
   
   const handleScroll = (event) => {
+    // Skip if scroll detection is paused (e.g., after manual pill click)
+    if (scrollDetectionPaused) return;
+    
     // Only process if we have hidden messages
     if (hiddenMessages.size === 0) return;
     
@@ -916,11 +934,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const pairs = getMessagePairs();
       const visiblePairs = pairs.filter(pair => {
         return pair.elements.some(el => !hiddenMessages.has(el));
-      }).length;
+      });
+      
+      // Calculate actual content sizes for accurate memory estimation
+      let totalSize = 0;
+      let visibleSize = 0;
+      
+      pairs.forEach(pair => {
+        pair.elements.forEach(el => {
+          const contentSize = (el.textContent || '').length + (el.innerHTML || '').length;
+          totalSize += contentSize;
+          
+          if (!hiddenMessages.has(el)) {
+            visibleSize += contentSize;
+          }
+        });
+      });
+      
       sendResponse({
-        visible: visiblePairs,
-        archived: pairs.length - visiblePairs,
-        total: pairs.length
+        visible: visiblePairs.length,
+        archived: pairs.length - visiblePairs.length,
+        total: pairs.length,
+        totalSize,
+        visibleSize
       });
       return true;
     }
